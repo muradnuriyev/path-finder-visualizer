@@ -1,19 +1,19 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   CircleMarker,
   MapContainer,
   Polyline,
   ScaleControl,
   TileLayer,
+  useMapEvents,
   ZoomControl
 } from 'react-leaflet';
-import type { LeafletMouseEvent } from 'leaflet';
-import { AlgorithmStep, Coordinate, GraphData } from '@/lib/graph/types';
+import type { LeafletMouseEvent, Map as LeafletMap } from 'leaflet';
+import { AlgorithmStep, Coordinate } from '@/lib/graph/types';
 
 type MapViewProps = {
-  graph: GraphData;
   start: Coordinate | null;
   goal: Coordinate | null;
   mode: 'start' | 'goal';
@@ -22,10 +22,11 @@ type MapViewProps = {
   stepIndex: number;
   bboxCenter: Coordinate;
   onMapClick: (coord: Coordinate) => void;
+  stepNodes: Array<{ id: string; lat: number; lon: number }>;
+  visitedOrder: string[];
 };
 
 export default function MapView({
-  graph,
   start,
   goal,
   mode,
@@ -33,67 +34,121 @@ export default function MapView({
   steps,
   stepIndex,
   bboxCenter,
-  onMapClick
+  onMapClick,
+  stepNodes,
+  visitedOrder
 }: MapViewProps) {
+  const [mounted, setMounted] = useState(false);
+  const [mapKey] = useState(() => `map-${Date.now()}`);
+  const mapId = useMemo(() => `leaflet-map-${mapKey}`, [mapKey]);
+  const mapRef = useRef<LeafletMap | null>(null);
   const activeStep = steps[stepIndex];
 
-  const visitedIds = useMemo(() => new Set(activeStep?.visited ?? []), [activeStep]);
+  const visitedIds = useMemo(() => {
+    const count = activeStep?.visitedCount ?? activeStep?.visited?.length ?? 0;
+    return new Set(visitedOrder.slice(0, count));
+  }, [activeStep, visitedOrder]);
   const frontierIds = useMemo(() => new Set(activeStep?.frontier ?? []), [activeStep]);
 
   const visitedPoints = useMemo(
     () =>
-      graph.nodes
+      stepNodes
         .filter((node) => visitedIds.has(node.id))
         .map((node) => [node.lat, node.lon] as [number, number]),
-    [graph.nodes, visitedIds]
+    [stepNodes, visitedIds]
   );
 
   const frontierPoints = useMemo(
     () =>
-      graph.nodes
+      stepNodes
         .filter((node) => frontierIds.has(node.id))
         .map((node) => [node.lat, node.lon] as [number, number]),
-    [graph.nodes, frontierIds]
+    [stepNodes, frontierIds]
   );
-
-  const graphSegments = useMemo(() => {
-    const nodeIndex = Object.fromEntries(graph.nodes.map((n) => [n.id, n]));
-    return graph.edges
-      .map((edge) => {
-        const from = nodeIndex[edge.from];
-        const to = nodeIndex[edge.to];
-        if (!from || !to) {
-          return null;
-        }
-        return [
-          [from.lat, from.lon],
-          [to.lat, to.lon]
-        ] as [number, number][];
-      })
-      .filter(Boolean) as [number, number][][];
-  }, [graph.edges, graph.nodes]);
 
   const routeLine = useMemo(
     () => path.map((point) => [point.lat, point.lon] as [number, number]),
     [path]
   );
 
-  const handleClick = (event: LeafletMouseEvent) => {
-    const { lat, lng } = event.latlng;
-    onMapClick({ lat, lon: lng });
+  const showFinalPath = routeLine.length > 1 && stepIndex >= steps.length - 1;
+
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, { lat: number; lon: number }>();
+    stepNodes.forEach((n) => map.set(n.id, { lat: n.lat, lon: n.lon }));
+    return map;
+  }, [stepNodes]);
+
+  const exploredLines = useMemo(() => {
+    const lines: [number, number][][] = [];
+    steps.slice(0, stepIndex + 1).forEach((step) => {
+      (step.expanded ?? []).forEach((neighborId) => {
+        const from = nodeMap.get(step.current);
+        const to = nodeMap.get(neighborId);
+        if (from && to) {
+          lines.push([
+            [from.lat, from.lon],
+            [to.lat, to.lon]
+          ]);
+        }
+      });
+    });
+    return lines;
+  }, [nodeMap, stepIndex, steps]);
+
+  useEffect(() => {
+    setMounted(true);
+    return () => {
+      setMounted(false);
+      if (mapRef.current) {
+        mapRef.current.remove();
+        const container = mapRef.current.getContainer?.();
+        if (container) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          delete (container as any)._leaflet_id;
+        }
+        mapRef.current = null;
+      }
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (typeof document === 'undefined') return;
+    const container = document.getElementById(mapId);
+    if (container && (container as unknown as { _leaflet_id?: string })._leaflet_id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      delete (container as any)._leaflet_id;
+    }
+  }, [mapId]);
+
+  if (!mounted) {
+    return null;
+  }
+
+  const ClickCatcher = () => {
+    useMapEvents({
+      click: (event: LeafletMouseEvent) => {
+        const { lat, lng } = event.latlng;
+        onMapClick({ lat, lon: lng });
+      }
+    });
+    return null;
   };
 
   return (
     <div className="map-wrapper">
       <MapContainer
+        key={mapKey}
+        id={mapId}
         center={[bboxCenter.lat, bboxCenter.lon]}
         zoom={15}
         scrollWheelZoom
         style={{ height: '100%', width: '100%' }}
         zoomControl={false}
         preferCanvas
-        onClick={handleClick}
+        ref={mapRef}
       >
+        <ClickCatcher />
         <TileLayer
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           attribution="© OpenStreetMap © CartoDB"
@@ -101,11 +156,11 @@ export default function MapView({
         <ZoomControl position="bottomright" />
         <ScaleControl position="bottomleft" />
 
-        {graphSegments.map((segment, index) => (
+        {exploredLines.map((segment, idx) => (
           <Polyline
-            key={`road-${index.toString()}`}
+            key={`explored-${idx.toString()}`}
             positions={segment}
-            pathOptions={{ color: '#223a63', weight: 3, opacity: 0.45 }}
+            pathOptions={{ color: '#2f6bff', weight: 3, opacity: 0.7 }}
           />
         ))}
 
@@ -127,7 +182,7 @@ export default function MapView({
           />
         ))}
 
-        {routeLine.length > 1 && (
+        {showFinalPath && (
           <Polyline
             positions={routeLine}
             pathOptions={{ color: '#41d6c3', weight: 6, opacity: 0.95 }}

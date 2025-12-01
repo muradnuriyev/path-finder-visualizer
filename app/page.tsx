@@ -1,22 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import MapView from '@/components/MapView';
+import dynamic from 'next/dynamic';
+import { useEffect, useState } from 'react';
 import ControlPanel from '@/components/ControlPanel';
 import StatsPanel from '@/components/StatsPanel';
-import graphData from '@/data/graph.json';
-import { AlgorithmStep, Coordinate, GraphData, RouteResponse } from '@/lib/graph/types';
+import { AlgorithmStep, Coordinate, RouteResponse } from '@/lib/graph/types';
+
+const MapView = dynamic(() => import('@/components/MapView'), { ssr: false });
 
 type AlgorithmName = 'bfs' | 'dijkstra' | 'astar';
 
-const typedGraph = graphData as GraphData;
-
-const defaultCenter: Coordinate = typedGraph.bbox
-  ? {
-      lat: (typedGraph.bbox.minLat + typedGraph.bbox.maxLat) / 2,
-      lon: (typedGraph.bbox.minLon + typedGraph.bbox.maxLon) / 2
-    }
-  : { lat: 40.374, lon: 49.849 };
+const fallbackCenter: Coordinate = { lat: 40.4093, lon: 49.8671 };
 
 export default function HomePage() {
   const [algorithm, setAlgorithm] = useState<AlgorithmName>('astar');
@@ -30,6 +24,9 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState({ distance: 0, visited: 0, elapsed: 0 });
+  const [stepNodes, setStepNodes] = useState<Array<{ id: string; lat: number; lon: number }>>([]);
+  const [bboxCenter, setBboxCenter] = useState<Coordinate>(fallbackCenter);
+  const [visitedOrder, setVisitedOrder] = useState<string[]>([]);
 
   const canRun = Boolean(start && goal);
   const disableStep = !steps.length || stepIndex >= steps.length - 1;
@@ -46,12 +43,10 @@ export default function HomePage() {
         }
         return prev + 1;
       });
-    }, 600);
+    }, 1200);
 
     return () => clearInterval(id);
   }, [playing, steps.length]);
-
-  const bboxCenter = useMemo(() => defaultCenter, []);
 
   const handleMapClick = (coord: Coordinate) => {
     if (mode === 'start') {
@@ -81,6 +76,17 @@ export default function HomePage() {
       const data = payload as RouteResponse;
       setPath(data.path);
       setSteps(data.steps);
+      setStepNodes(data.stepNodes ?? []);
+      setVisitedOrder(data.visitedOrder ?? []);
+      if (data.truncated) {
+        setError('Result was truncated for visualization due to size; path/steps partially shown.');
+      }
+      if (data.bbox) {
+        setBboxCenter({
+          lat: (data.bbox.minLat + data.bbox.maxLat) / 2,
+          lon: (data.bbox.minLon + data.bbox.maxLon) / 2
+        });
+      }
       setStepIndex(0);
       setStats({
         distance: data.distance,
@@ -100,6 +106,8 @@ export default function HomePage() {
     setGoal(null);
     setPath([]);
     setSteps([]);
+    setStepNodes([]);
+    setVisitedOrder([]);
     setStepIndex(0);
     setPlaying(false);
     setError(null);
@@ -120,7 +128,6 @@ export default function HomePage() {
   return (
     <div className="app-shell">
       <MapView
-        graph={typedGraph}
         start={start}
         goal={goal}
         mode={mode}
@@ -129,6 +136,8 @@ export default function HomePage() {
         stepIndex={stepIndex}
         bboxCenter={bboxCenter}
         onMapClick={handleMapClick}
+        stepNodes={stepNodes}
+        visitedOrder={visitedOrder}
       />
 
       <div className="hud">

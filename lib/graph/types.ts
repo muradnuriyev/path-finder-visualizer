@@ -34,8 +34,10 @@ export type Graph = {
 
 export type AlgorithmStep = {
   current: string;
-  visited: string[];
+  visited?: string[];
   frontier: string[];
+  visitedCount?: number;
+  expanded?: string[];
 };
 
 export type PathResult = {
@@ -56,4 +58,9 @@ export type RouteResponse = {
   goal: Coordinate;
   startNode: string;
   goalNode: string;
+  stepNodes: Array<{ id: string; lat: number; lon: number }>;
+  bbox?: BoundingBox;
+  visitedOrder: string[];
+  truncated?: boolean;
+  fallbackUsed?: boolean;
 };

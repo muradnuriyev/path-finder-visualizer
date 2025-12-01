@@ -9,14 +9,19 @@ type FrontierEntry = {
 export function dijkstra(
   graph: Graph,
   start: string,
-  goal: string
+  goal: string,
+  options?: { recordEvery?: number; frontierSample?: number }
 ): PathResult {
+  const recordEvery = options?.recordEvery ?? 1;
+  const frontierSample = options?.frontierSample ?? 50;
+
   const distances = new Map<string, number>();
   const visited = new Set<string>();
   const visitedOrder: string[] = [];
   const cameFrom = new Map<string, string>();
   const steps: AlgorithmStep[] = [];
   const frontier: FrontierEntry[] = [{ id: start, priority: 0 }];
+  let processed = 0;
 
   Object.keys(graph.nodes).forEach((id) => distances.set(id, Infinity));
   distances.set(start, 0);
@@ -31,15 +36,9 @@ export function dijkstra(
 
     visited.add(current.id);
     visitedOrder.push(current.id);
-    steps.push({
-      current: current.id,
-      frontier: frontier.map((node) => node.id),
-      visited: Array.from(visited)
-    });
-
-    if (current.id === goal) {
-      break;
-    }
+    processed += 1;
+    const expanded: string[] = [];
+    const shouldRecord = processed % recordEvery === 0 || current.id === goal;
 
     const neighbors = graph.adjacency[current.id] ?? [];
     neighbors.forEach(({ id: neighborId, weight }) => {
@@ -48,8 +47,22 @@ export function dijkstra(
         distances.set(neighborId, alt);
         cameFrom.set(neighborId, current.id);
         frontier.push({ id: neighborId, priority: alt });
+        expanded.push(neighborId);
       }
     });
+
+    if (shouldRecord) {
+      steps.push({
+        current: current.id,
+        frontier: frontier.slice(0, frontierSample).map((node) => node.id),
+        visitedCount: visited.size,
+        expanded
+      });
+    }
+
+    if (current.id === goal) {
+      break;
+    }
   }
 
   const path = reconstructPath(cameFrom, start, goal);

@@ -1,9 +1,23 @@
 import path from 'path';
 import { promises as fs } from 'fs';
 
-type OverpassElement =
-  | { type: 'node'; id: number; lat: number; lon: number }
-  | { type: 'way'; id: number; nodes: number[]; tags?: Record<string, string> };
+type NodeElement = { type: 'node'; id: number; lat: number; lon: number };
+type WayElement = {
+  type: 'way';
+  id: number;
+  nodes: number[];
+  tags?: Record<string, string>;
+};
+
+type OverpassElement = NodeElement | WayElement;
+
+function isNodeElement(el: OverpassElement): el is NodeElement {
+  return el.type === 'node';
+}
+
+function isWayElement(el: OverpassElement): el is WayElement {
+  return el.type === 'way';
+}
 
 type BBox = {
   south: number;
@@ -46,9 +60,36 @@ function haversineDistance(
   return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+const OVERPASS_ENDPOINTS = [
+  process.env.OVERPASS_URL ?? 'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter'
+];
+
+async function requestOverpass(query: string) {
+  let lastError: Error | null = null;
+  for (const url of OVERPASS_ENDPOINTS) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        body: query,
+        headers: { 'Content-Type': 'text/plain', Accept: 'application/json' }
+      });
+      if (!res.ok) {
+        lastError = new Error(`Overpass request failed: ${res.status} ${res.statusText}`);
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      return res;
+    } catch (err) {
+      lastError = err as Error;
+    }
+  }
+  throw lastError ?? new Error('Overpass request failed');
+}
+
 async function fetchGraph(bbox: BBox) {
   const query = `
-[out:json];
+[out:json][timeout:180];
 (
   way["highway"](${bbox.south},${bbox.west},${bbox.north},${bbox.east});
 );
@@ -56,49 +97,68 @@ async function fetchGraph(bbox: BBox) {
 out body;
 `;
 
-  const res = await fetch('https://overpass-api.de/api/interpreter', {
-    method: 'POST',
-    body: query,
-    headers: { 'Content-Type': 'text/plain' }
-  });
-
-  if (!res.ok) {
-    throw new Error(`Overpass request failed: ${res.status} ${res.statusText}`);
-  }
+  const res = await requestOverpass(query);
 
   const payload = (await res.json()) as { elements: OverpassElement[] };
   const nodeMap = new Map<number, { id: string; lat: number; lon: number }>();
   const edges: { from: string; to: string; weight: number }[] = [];
   const edgeSet = new Set<string>();
 
-  payload.elements
-    .filter((el) => el.type === 'node')
-    .forEach((node) => {
-      nodeMap.set(node.id, { id: `n${node.id}`, lat: node.lat, lon: node.lon });
-    });
+  payload.elements.filter(isNodeElement).forEach((node) => {
+    nodeMap.set(node.id, { id: `n${node.id}`, lat: node.lat, lon: node.lon });
+  });
 
-  payload.elements
-    .filter((el) => el.type === 'way')
-    .forEach((way) => {
-      const ids = way.nodes;
-      for (let i = 0; i < ids.length - 1; i += 1) {
-        const a = nodeMap.get(ids[i]);
-        const b = nodeMap.get(ids[i + 1]);
-        if (!a || !b) continue;
-        const weight = haversineDistance(a, b);
+  const drivable = new Set([
+    'motorway',
+    'motorway_link',
+    'trunk',
+    'trunk_link',
+    'primary',
+    'primary_link',
+    'secondary',
+    'secondary_link',
+    'tertiary',
+    'tertiary_link',
+    'unclassified',
+    'residential',
+    'living_street',
+    'service'
+  ]);
+  const bannedAccess = new Set(['no', 'private']);
+
+  payload.elements.filter(isWayElement).forEach((way) => {
+    const highway = way.tags?.highway;
+    const access = way.tags?.access;
+    if (!highway || !drivable.has(highway)) return;
+    if (access && bannedAccess.has(access)) return;
+
+    const ids = way.nodes;
+    const oneway = way.tags?.oneway;
+
+    const allowForward = oneway !== '-1';
+    const allowBackward = oneway !== 'yes';
+
+    for (let i = 0; i < ids.length - 1; i += 1) {
+      const a = nodeMap.get(ids[i]);
+      const b = nodeMap.get(ids[i + 1]);
+      if (!a || !b) continue;
+      const weight = haversineDistance(a, b);
+      if (allowForward) {
         const abKey = `${a.id}-${b.id}`;
-        const baKey = `${b.id}-${a.id}`;
-
         if (!edgeSet.has(abKey)) {
           edgeSet.add(abKey);
           edges.push({ from: a.id, to: b.id, weight });
         }
+      }
+      if (allowBackward) {
+        const baKey = `${b.id}-${a.id}`;
         if (!edgeSet.has(baKey)) {
           edgeSet.add(baKey);
           edges.push({ from: b.id, to: a.id, weight });
         }
       }
-    });
+    }
+  });
 
   const nodes = Array.from(nodeMap.values());
   const bounds = nodes.reduce(

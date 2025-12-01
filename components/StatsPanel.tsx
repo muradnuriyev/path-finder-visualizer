@@ -8,7 +8,7 @@ type StatsPanelProps = {
 
 function formatDistance(meters: number): string {
   if (!Number.isFinite(meters)) {
-    return '—';
+    return 'N/A';
   }
   if (meters >= 1000) {
     return `${(meters / 1000).toFixed(2)} km`;
@@ -37,12 +37,12 @@ export default function StatsPanel({
         </div>
         <div className="stat">
           <div className="stat-label">Elapsed</div>
-          <div className="stat-value">{elapsedMs ? `${elapsedMs} ms` : '—'}</div>
+          <div className="stat-value">{elapsedMs ? `${elapsedMs} ms` : 'N/A'}</div>
         </div>
         <div className="stat">
           <div className="stat-label">Step</div>
           <div className="stat-value">
-            {stepsCount ? `${currentStep + 1} / ${stepsCount}` : '—'}
+            {stepsCount ? `${currentStep + 1} / ${stepsCount}` : 'N/A'}
           </div>
         </div>
       </div>
