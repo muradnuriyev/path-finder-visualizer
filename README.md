@@ -1,33 +1,66 @@
 # Real-world Pathfinding Visualizer
 
-Next.js + React-Leaflet playground for experimenting with BFS, Dijkstra, and A* on a street graph sourced from OpenStreetMap.
+Интерактивный визуализатор поиска пути по реальным улицам (OSM) с поддержкой BFS, Дейкстры и A*. Написан на Next.js + React-Leaflet. Можно кликнуть старт/финиш на карте, выбрать алгоритм и наблюдать пошаговую анимацию работы.
 
-## Quick start
-- Install deps: `npm install`
-- Run dev server: `npm run dev` then open `http://localhost:3000`
-- Pick click mode (Start / Goal), click two points on the map, choose an algorithm, and hit **Run**. Use **Step** / **Play** to animate the algorithm’s exploration.
+## Возможности
+- Три алгоритма: BFS (не взвешенный), Dijkstra (кратчайший путь по весам), A* (эвристика + расстояние).
+- Пошаговая анимация и Play/Step управление; визуализация фронтира, посещённых узлов, лучей расширения и финального пути.
+- Привязка к реальному графу улиц (OSM), учёт направлений дорог; fallback для поиска пути при разрывах в данных.
+- Быстрая подмена графа: скрипт генерации `data/graph.json` из Overpass API.
 
-## Repository layout
-- `app/page.tsx` — client UI: map, controls, stats.
-- `app/api/route/route.ts` — API route that loads the prebuilt graph, snaps start/goal to nearest nodes, runs the chosen algorithm, and returns the path + steps.
-- `components/` — UI pieces (`MapView`, `ControlPanel`, `StatsPanel`).
-- `lib/graph/` — graph types, loading, nearest-node search.
-- `lib/algorithms/` — BFS, Dijkstra, A*, plus distance helpers.
-- `data/graph.json` — generated graph for a small Baku slice (sample).
-- `scripts/fetch-osm.ts` — dev helper to fetch OSM data via Overpass and build `data/graph.json`.
-
-## Regenerating `graph.json`
-The repo ships with a tiny sample graph so the UI works offline. To build your own:
-
+## Быстрый старт
 ```bash
 npm install
-npm run fetch:osm -- --bbox=40.368,49.836,40.375,49.847
+npm run dev
+# открывайте http://localhost:3000
 ```
+Шаги в UI:
+1) Выберите режим клика Start/Goal и поставьте точки на карте.
+2) Выберите алгоритм (BFS/Dijkstra/A*).
+3) Нажмите Run. Для анимации используйте Step/Play.
 
-- `--bbox` is `south,west,north,east` (WGS84). The default above is a central Baku patch.
-- The script requests `highway=*` ways, builds a bidirectional weighted graph (weights = haversine meters), and writes `data/graph.json`.
-- Requires Node 18+ (for built-in `fetch`) and runs through `ts-node` with a CommonJS override for convenience.
+## Архитектура
+- `app/page.tsx` — клиентский экран, логика UI и анимации.
+- `components/` — `MapView` (карта + отрисовка шагов), `ControlPanel`, `StatsPanel`.
+- `app/api/route/route.ts` — API: загружает граф, ищет ближайшие узлы к кликам, гоняет выбранный алгоритм, возвращает путь/шаги/статистику. Есть fallback: если направленный граф не даёт путь, пробует недиректный.
+- `lib/algorithms/` — BFS, Dijkstra, A*, сбор шагов для визуализации.
+- `lib/graph/` — типы, загрузка графа, поиск ближайшего узла, расчёт расстояний.
+- `data/graph.json` — пример графа (Баку, уменьшенный). Не коммитьте гигантские файлы — GitHub режет >100 MB.
+- `scripts/fetch-osm.ts` — генерация графа из Overpass API (только автомобильные дороги, учёт oneway).
 
-## Notes
-- The backend keeps the graph in memory for speed; restart the dev server after regenerating the graph.
-- The UI uses OpenStreetMap raster tiles via the default public endpoint; swap the tile URL if you need your own server.
+## Генерация собственного графа
+Запросы к Overpass могут быть медленными. Пример на центральный Баку (средний размер, ~11 MB):
+```bash
+npm run fetch:osm -- --bbox=40.36,49.82,40.42,49.92
+```
+Параметр `--bbox` — `south,west,north,east` (WGS84). Чем больше область, тем больше файл. После генерации перезапустите `npm run dev`, чтобы сбросить кеш.
+
+### Советы по генерации
+- Для больших областей используйте свою bbox и дождитесь завершения (может занять минуты).
+- Если нужен другой транспорт, правьте фильтр в `scripts/fetch-osm.ts` (список `drivable` и логику oneway).
+- Не храните огромные `graph.json` в Git — добавьте в `.gitignore` или используйте Git LFS.
+
+## Сборка и команды
+- `npm run dev` — dev-сервер (Next 16.0.6, React 19.2).
+- `npm run build` — прод сборка.
+- `npm run fetch:osm -- --bbox=...` — генерация графа.
+- `npm run lint` — стандартный линт Next (по желанию, можно вернуть `eslint` в `next.config.mjs`, если нужно).
+
+## Визуализация шагов
+Алгоритмы возвращают массив шагов с фронтиром, количеством посещённых и рёбрами `expanded`. `MapView` рисует:
+- голубые точки — visited,
+- оранжевые — frontier,
+- синие лучи — расширения,
+- финальная бирюзовая линия — путь (показывается на последнем шаге).
+
+## Ограничения и известные нюансы
+- Большие bbox ⇒ тяжёлый граф и рендер. При лагах уменьшайте область или ослабляйте детализацию (см. `recordEvery`, лимиты шагов/узлов в API).
+- В редких случаях OSM-разрывы мешают маршруту; fallback пробует недиректный граф, но может дать маршрут «против направления».
+- Dev-mode двойной рендер: в `MapView` добавлена очистка `_leaflet_id` и удаления карты при размонтировании, чтобы избежать ошибки “Map container is already initialized”.
+
+## Стек и версии
+- Next.js 16.0.6, React 19.2.0, React-Leaflet 5.0.0, Leaflet 1.9.4
+- TypeScript 5.9.x, ESLint 9.x
+
+## Лицензия
+MIT (если иное не указано в репозитории). OSM данные — под ODbL; при использовании собственного графа соблюдайте условия OSM.
